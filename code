@@ -1,0 +1,212 @@
+from pythainlp.tag.named_entity import ThaiNameTagger
+from pythainlp import sent_tokenize, word_tokenize
+from pythainlp.tag.named_entity import ThaiNameTagger
+from pythainlp.spell import correct
+from pythainlp.tag import pos_tag
+import glob
+
+def read_text_file(file_path,returntype,delimeter=None): 
+    raw_str = ''
+    master_list = []
+    for fn in glob.glob(file_path):
+        with open (fn) as f:
+            original = f.readlines()
+            lines = [line.rstrip('\n') for line in original]
+            for each_line in lines: 
+                raw_str = raw_str + each_line.strip()
+            if delimeter is not None:
+                master_list.extend(raw_str.split(delimeter))
+            else:
+                master_list.append(raw_str) 
+                
+    if returntype == 'str': 
+        return raw_str 
+    return master_list 
+
+def average_token_len(token_list):
+    token_len = 0
+    for char in token_list: 
+        token_len += len(char)
+    return token_len / len(token_list)
+
+def align_diff(hyp_aligned, ref_aligned): 
+
+    n_errors = 0; ref_length = 0
+    for i in range(len(hyp_aligned)):
+        if hyp_aligned[i] != ref_aligned[i]: n_errors += 1
+        if ref_aligned[i] != '__': ref_length += 1
+    return n_errors, ref_length
+
+def align(x, y):
+    x = ['#'] + x; y = ['#'] + y
+    m = len(x); n = len(y)
+    C = [[[0, None]] * n for i in range(m)]
+    for j in range(1, n): C[0][j] = [C[0][j-1][0]+1, (0, j-1)]
+    for i in range(1, m): C[i][0] = [C[i-1][0][0]+1, (i-1, 0)]
+    for i in range(1, m):
+        for j in range(1, n):
+            C[i][j] = min([[C[i-1][j-1][0]+int(x[i]!=y[j]), (i-1, j-1)],
+                           [C[i-1][j][0]+1, (i-1, j)],
+                           [C[i][j-1][0]+1, (i, j-1)]])
+    crumbs = [(m-1, n-1)]
+    while crumbs[-1] != (0, 0):
+        i, j = crumbs[-1]
+        crumbs.append(C[i][j][1])
+    crumbs.reverse()
+    xa = []; ya = []
+    for t in range(1, len(crumbs)):
+        pi, pj = crumbs[t-1]
+        i, j = crumbs[t]
+        if pi == i: xa.append('__')
+        elif pi != i: xa.append(x[i])
+        if pj == j: ya.append('__')
+        elif pj != j: ya.append(y[j])
+    return xa, ya
+
+def get_tp(hyp, ref): 
+    out = []
+    for x in hyp:
+        if x in ref:
+            out.append(x)
+    return out
+
+def get_fn_fp_csv_file(file_path):
+    import csv
+    with open(file_path, mode='r') as csv_file:
+        csv_reader = csv.DictReader(csv_file)
+        next(csv_reader, None)  
+        fncount = 0
+        fpcount = 0
+        for row in csv_reader:
+            if row['FN'] != '':
+                try:
+                    fncount += int(row['FN']) 
+                except ValueError:
+                    pass
+            if row['FP'] != '':
+                try:
+                    fpcount += int(row['FP']) 
+                except ValueError:
+                    pass
+    return fncount, fpcount
+
+def score(master,data,csv_file_path):
+    tp = len(get_tp(data, master))
+    result = get_fn_fp_csv_file(csv_file_path)
+    fn = result[0]
+    fp = result[1]
+    precision = tp/(tp+fp)
+    recall = tp/(tp+fn)
+    F1 = 2*((precision*recall)/(precision+recall))
+    return F1
+
+raw_str = read_text_file('raw/*','str')
+master_wlist = read_text_file('MasterCut/*','list', '/')  
+master_sent = read_text_file('Sent_MasterCut/*','list', '_#_') 
+master_NER = read_text_file('master_NER/*','str', '^')
+
+'''Speed Test'''
+import time
+start_time_newmm = time.time()
+newmm = word_tokenize(raw_str, engine="newmm", keep_whitespace = None)
+
+end_time_newmm = time.time()
+start_time_deepcut = time.time()
+deepcut = word_tokenize(raw_str, engine="deepcut",keep_whitespace = None)
+end_time_deepcut = time.time()
+print('')
+print('Time spent using NewMM:', end_time_newmm - start_time_newmm)
+print('Time spent using Deepcut:', end_time_deepcut - start_time_deepcut)
+print('')
+
+'''Word Tokenization'''
+print ('Master Word Count: ', len(master_wlist))  
+print ('NewMM Word Count: ', len(newmm))   
+print ('Deepcut Word Count: ', len(deepcut))
+newmm_enu = list(enumerate(newmm,1))
+deep_enu = list(enumerate(deepcut, 1))
+print('')
+
+'''AVG Token Len''' 
+newmm_avg_token = average_token_len(newmm)
+deepcut_avg_token = average_token_len(deepcut)
+print('NewMM avg character len:', newmm_avg_token, len(newmm))
+print('Deepcut avg character len:', deepcut_avg_token, len(deepcut))
+print('')
+
+'''Sentence Tokenization'''
+sent_tokens= sent_tokenize(raw_str, engine="newmm")
+
+
+'''Spellcheck'''
+slangs = [
+'โล๊ะ','น่าจ้า',
+'น่า','จ้าาา',
+'เปน','โรงบาล',
+'จิง','พักก๊อนนน',
+'ขี้เกียด','น้าาาาา',
+'ไฟแนน','ใด้',
+'ใหน','รุ้','ค้าบบบบ',
+ 'น้าา',
+'จ้า','หน้าเอ็นดู',
+'รูกกกกกกก','มะนุด',
+'ยุ่','ขอบคุน',
+'นะค่ะ','เจ้างพาภ',
+'ฝั่ง','สายพัน',
+'เลยยย','มากกก',
+'มะวาน','เอ๊ยยยยยย',
+'คือออออออ','เล้ยยยยยยยยย',
+'มากกกกกกกก','จ้าาาาา',
+'ซิ','คับ',
+'อนุญาติ','ครัฟ',
+'แกรน','มังสาวิรัติ',
+'แข๊งแรง'
+]
+with open ('slangs_corrected') as f:
+    p = f.readlines()
+    master = [o.rstrip('\n') for o in p]
+    
+tne1 = 0; tne2 = 0; trl = 0
+for i in range(len(slangs)): 
+    corrected = correct(slangs[i])
+    x = [a.split() for a in slangs[i]]
+    y = [b.split() for b in corrected]
+    z = [c.split() for c in master[i]]
+    hyp1, ms1 = align(x,z) 
+    hyp2, ms2 = align(y,z) 
+    ne1, rl = align_diff(hyp1, ms1) 
+    ne2, rl = align_diff(hyp2, ms2)
+    tne1 += ne1; tne2 += ne2; trl += rl 
+print('Character error rate for Slangs:', tne1/trl) 
+print('Character error rate for System:', tne2/trl)
+print('') 
+
+'''NER'''
+count = 0
+for i in master_NER:
+    count += 1
+ner1 = ThaiNameTagger()
+ner2 = ner1.get_ner(raw_str,pos=True)
+ner_count = 0
+for i in ner2:
+    if i[2][:2] == 'B-':  
+        ner_count += 1
+
+'''F1 Score'''
+
+'''Open CSV file'''
+newmm_fnfp = get_fn_fp_csv_file('newmm_fnfp.csv')
+deep_fnfp = get_fn_fp_csv_file('deepcut_fnfp.csv')
+sent_fnfp = get_fn_fp_csv_file('sent_fnfp.csv')
+ner_fnfp = get_fn_fp_csv_file('NER.csv')
+
+'''Get Score'''
+w_newmm_sc = score(master_wlist,newmm,'newmm_fnfp.csv')
+w_deep_sc = score(master_wlist,deepcut,'deepcut_fnfp.csv')
+sent_sc = score(master_sent,sent_tokens ,'sent_fnfp.csv')
+ner_sc = score(master_NER,i,'NER.csv')  
+print('NewMM F1: ', w_newmm_sc)
+print('Deepcut F1: ', w_deep_sc)
+print('NER F1: ', ner_sc)
+print('Sent F1:',sent_sc)
+print('')
